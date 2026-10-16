@@ -30,6 +30,13 @@ public class RequestRepository {
     return result;
   }
 
+  public Map<String, Object> lockRequest(String id) {
+    var rows =
+        jdbc.queryForList("SELECT * FROM replenishment_requests WHERE id=? FOR UPDATE", id);
+    if (rows.isEmpty()) throw new BusinessException(404, "Solicitação não encontrada");
+    return rows.getFirst();
+  }
+
   public List<Map<String, Object>> items(String id) {
     return jdbc.queryForList(
         "SELECT ri.*,p.name product_name,requested-COALESCE(received,0) missing FROM request_items"

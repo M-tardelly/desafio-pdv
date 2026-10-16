@@ -14,4 +14,9 @@ class NeedCalculatorTest {
   void zeroAtTarget() {
     assertEquals(0, NeedCalculator.calculate(10, 10));
   }
+
+  @Test
+  void zeroWhenStockAboveTarget() {
+    assertEquals(0, NeedCalculator.calculate(7, 5));
+  }
 }

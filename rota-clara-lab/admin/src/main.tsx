@@ -204,6 +204,9 @@ function App() {
                     <small>{r.id.slice(0, 8)}</small>
                   </span>
                   <span className="badge">{r.status}</span>
+                  {r.document_status && (
+                    <small>Doc: {r.document_status}</small>
+                  )}
                 </button>
               ))
             )}

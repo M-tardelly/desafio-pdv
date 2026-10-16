@@ -15,12 +15,15 @@ public class AdminController {
   private final RequestRepository repository;
   private final RequestService service;
   private final DocumentService documents;
+  private final NeedsCache needsCache;
 
-  public AdminController(LabIdentity i, RequestRepository r, RequestService s, DocumentService d) {
+  public AdminController(
+      LabIdentity i, RequestRepository r, RequestService s, DocumentService d, NeedsCache needsCache) {
     identity = i;
     repository = r;
     service = s;
     documents = d;
+    this.needsCache = needsCache;
   }
 
   @GetMapping("/session")
@@ -79,5 +82,18 @@ public class AdminController {
   public ApiResponse mode(@RequestBody Map<String, String> input, HttpServletRequest r) {
     identity.require(r, "MANAGER");
     return ApiResponse.ok(documents.mode(input.get("mode")));
+  }
+
+  @GetMapping("/lab/cache-stats")
+  public ApiResponse cacheStats(HttpServletRequest r) {
+    identity.role(r);
+    return ApiResponse.ok(needsCache.stats());
+  }
+
+  @PostMapping("/lab/cache-stats/reset")
+  public ApiResponse cacheStatsReset(HttpServletRequest r) {
+    identity.require(r, "MANAGER");
+    needsCache.resetStats();
+    return ApiResponse.ok(needsCache.stats());
   }
 }

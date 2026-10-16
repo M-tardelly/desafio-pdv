@@ -10,8 +10,14 @@ request=call('/admin/requests','POST',{'destination':'loja-aurora','items':[{'pr
 result=call('/admin/requests/'+str(request['id'])+'/confirm','POST',{'items':[{'product_id':'agua-500','received':4},{'product_id':'cafe-250','received':2}]},'operador-local')
 assert result['success'],result
 assert result['data']['status']=='CONFIRMED'
-document=call('/admin/requests/'+str(request['id'])+'/document')['data']
-assert document['status']=='AUTHORIZED_SIMULATION',document
+import time
+document=None
+deadline=time.time()+45
+while time.time()<deadline:
+ document=call('/admin/requests/'+str(request['id'])+'/document')['data']
+ if document.get('status')=='AUTHORIZED_SIMULATION': break
+ time.sleep(1)
+assert document and document.get('status')=='AUTHORIZED_SIMULATION',document
 with urllib.request.urlopen(urllib.request.Request(ROOT+'/admin/requests/'+str(request['id'])+'/document/xml',headers={'Authorization':'Bearer gestor-local'})) as r:
  assert b'SIMULACAO' in r.read()
 print('SMOKE OK: session, inventory, needs, creation, partial confirmation, fiscal and stored XML')

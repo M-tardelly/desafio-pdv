@@ -4,6 +4,6 @@ public final class NeedCalculator {
   private NeedCalculator() {}
 
   public static int calculate(int stock, int target) {
-    return Math.abs(target - stock);
+    return Math.max(0, target - stock);
   }
 }

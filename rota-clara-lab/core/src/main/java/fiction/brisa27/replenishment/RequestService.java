@@ -5,18 +5,26 @@ import fiction.brisa27.documents.DocumentService;
 import java.util.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class RequestService {
   private final RequestRepository repository;
   private final DocumentService documents;
+  private final NeedsCache needsCache;
 
-  public RequestService(RequestRepository r, DocumentService d) {
+  public RequestService(RequestRepository r, DocumentService d, NeedsCache needsCache) {
     repository = r;
     documents = d;
+    this.needsCache = needsCache;
   }
 
   public List<Map<String, Object>> needs(String store) {
+    return needsCache.getOrLoad(store, () -> loadNeeds(store));
+  }
+
+  private List<Map<String, Object>> loadNeeds(String store) {
     var rows =
         repository.jdbc().queryForList(
             "SELECT i.product_id,p.name product_name,i.stock,i.target FROM inventory i JOIN"
@@ -41,7 +49,7 @@ public class RequestService {
   public Map<String, Object> create(Inputs.Create input, String actor) {
     if (input == null || input.items() == null || input.items().isEmpty())
       throw new BusinessException(400, "Selecionar pelo menos um item");
-    var available = needs(input.destination());
+    var available = loadNeeds(input.destination());
     var seen = new HashSet<String>();
     for (var item : input.items()) {
       if (item.requested() == null || item.requested() <= 0 || !seen.add(item.product_id()))
@@ -74,7 +82,7 @@ public class RequestService {
 
   @Transactional
   public Map<String, Object> confirm(String id, Inputs.Confirm input, String actor) {
-    var request = repository.detail(id);
+    var request = repository.lockRequest(id);
     var items = repository.items(id);
     if (input == null || input.items() == null || input.items().size() != items.size())
       throw new BusinessException(400, "Informar todos os itens");
@@ -89,8 +97,23 @@ public class RequestService {
       throw new BusinessException(400, "Entrega totalmente zerada");
     for (var item : items) {
       String product = (String) item.get("product_id");
+      if (!received.containsKey(product))
+        throw new BusinessException(400, "Informar todos os itens");
+    }
+
+    if ("CONFIRMED".equals(request.get("status"))) {
+      if (!ConfirmIdempotency.matchesPrevious(items, received))
+        throw new BusinessException(
+            409, "Recebimento já confirmado com quantidades diferentes");
+      return repository.detail(id);
+    }
+    if (!"OPEN".equals(request.get("status")))
+      throw new BusinessException(409, "Solicitação não está aberta para confirmação");
+
+    for (var item : items) {
+      String product = (String) item.get("product_id");
       Integer amount = received.get(product);
-      if (amount == null || amount > ((Number) item.get("requested")).intValue())
+      if (amount > ((Number) item.get("requested")).intValue())
         throw new BusinessException(400, "Quantidade acima da solicitação");
       int stock =
           repository.jdbc().queryForObject(
@@ -99,6 +122,11 @@ public class RequestService {
               request.get("origin"),
               product);
       if (stock < amount) throw new BusinessException(400, "Saldo insuficiente no centro");
+      repository.jdbc().queryForObject(
+          "SELECT stock FROM inventory WHERE location_id=? AND product_id=? FOR UPDATE",
+          Integer.class,
+          request.get("destination"),
+          product);
     }
     for (var item : items) {
       String product = (String) item.get("product_id");
@@ -114,18 +142,34 @@ public class RequestService {
           request.get("destination"),
           product);
       repository.jdbc().update(
-          "UPDATE request_items SET requested=?,received=? WHERE request_id=? AND product_id=?",
-          amount,
+          "UPDATE request_items SET received=? WHERE request_id=? AND product_id=?",
           amount,
           id,
           product);
     }
-    repository.jdbc().update(
-        "UPDATE replenishment_requests SET"
-            + " status='CONFIRMED',confirmed_by=?,confirmed_at=CURRENT_TIMESTAMP WHERE id=?",
-        actor,
-        id);
-    documents.process(id);
+    int updated =
+        repository.jdbc().update(
+            "UPDATE replenishment_requests SET"
+                + " status='CONFIRMED',confirmed_by=?,confirmed_at=CURRENT_TIMESTAMP WHERE id=? AND"
+                + " status='OPEN'",
+            actor,
+            id);
+    if (updated != 1)
+      throw new BusinessException(409, "Solicitação não está aberta para confirmação");
+    documents.enqueue(id);
+    String destination = (String) request.get("destination");
+    Runnable invalidate = () -> needsCache.invalidate(destination);
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.registerSynchronization(
+          new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              invalidate.run();
+            }
+          });
+    } else {
+      invalidate.run();
+    }
     return repository.detail(id);
   }
 }
